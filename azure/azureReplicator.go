@@ -1,35 +1,24 @@
 package azure
 
 import (
-	"os"
+	"context"
 	"fmt"
 	"log"
-	"context"
 	"net/url"
+	"os"
+
 	"github.com/Azure/azure-storage-blob-go/azblob"
-	"github.com/labstack/echo"
-	rm "github.com/Dayasagara/aws-azure-replication/responseManager"
+	"github.com/joho/godotenv"
 )
 
-func handleErrors(err error) {
-	if err != nil {
-		if serr, ok := err.(azblob.StorageError); ok { // This error is a Service-specific
-			switch serr.ServiceCode() { // Compare serviceCode to ServiceCodeXxx constants
-			case azblob.ServiceCodeContainerAlreadyExists:
-				log.Println("Received 409. Container already exists")
-				return
-			}
-		}
-		log.Fatal(err)
-	}
-}
-
-func InsertIntoBLOBContainer(c echo.Context) error {
-	fileName := "test"
-	file, err := os.Open(fileName)
-	defer file.Close()
-
+func InsertIntoBLOBContainer(file *os.File, blobErr chan error, fileName string) {
 	log.Printf("Azure Blob storage quick start sample\n")
+
+	err := godotenv.Load()
+	if err != nil {
+		blobErr <- err
+		return
+	}
 
 	// From the Azure portal, get your storage account name and key and set environment variables.
 	accountName, accountKey := os.Getenv("AZURE_STORAGE_ACCOUNT"), os.Getenv("AZURE_STORAGE_ACCESS_KEY")
@@ -40,12 +29,14 @@ func InsertIntoBLOBContainer(c echo.Context) error {
 	// Create a default request pipeline using your storage account name and account key.
 	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
 	if err != nil {
-		log.Fatal("Invalid credentials with error: " + err.Error())
+		log.Println("Invalid credentials with error: " + err.Error())
+		blobErr <- err
+		return
 	}
 	p := azblob.NewPipeline(credential, azblob.PipelineOptions{})
 
 	//Enter the name of the container
-	containerName := ""
+	containerName := os.Getenv("CONTAINERNAME")
 	// From the Azure portal, get your storage account blob service URL endpoint.
 	URL, _ := url.Parse(
 		fmt.Sprintf("https://%s.blob.core.windows.net/%s", accountName, containerName))
@@ -58,13 +49,22 @@ func InsertIntoBLOBContainer(c echo.Context) error {
 	blobURL := containerURL.NewBlockBlobURL(fileName)
 
 	ctx := context.Background() // This example uses a never-expiring context
+	/*Use this to create container
 	_, err = containerURL.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)
-	handleErrors(err)
+	if err != nil {
+		log.Println("Container error")
+		blobErr <- err
+		return
+	}*/
 
 	log.Printf("Uploading the file with blob name: %s\n", fileName)
 	_, err = azblob.UploadFileToBlockBlob(ctx, file, blobURL, azblob.UploadToBlockBlobOptions{
 		BlockSize:   4 * 1024 * 1024,
 		Parallelism: 16})
-	handleErrors(err)
-	return rm.ResponseMapper(200, "Succesfully uploaded to Azure", c)
+	if err != nil {
+		log.Println("Insertion error")
+		blobErr <- err
+		return
+	}
+	blobErr <- nil
 }
